@@ -1,6 +1,7 @@
 using SNOW
 using Test
 using Zygote
+using BenchmarkTools
 
 checkallocations = false
 snopttest = false
@@ -63,6 +64,69 @@ SNOW.evaluate!(g, df, dg, x, cache)
 
 @test df == [2*x[1]; -1.0]
 @test dg == [-2.0, 2*x[1], 1.0, -1.0]
+
+# sparse with reverse and finite-difference
+for fd in (ForwardFD(), CentralFD(), ComplexStep())
+    dg = zeros(length(sp.rows))
+    cache = SNOW.createcache(sp, [ReverseAD(), fd], test1!, nx, ng)
+    SNOW.evaluate!(g, df, dg, x, cache)
+
+    @test isapprox(df, [2*x[1]; -1.0])
+    @test isapprox(dg, [-2.0, 2*x[1], 1.0, -1.0])
+end
+
+function benchstats(g, df, dg, x, cache)
+    bench = @benchmark SNOW.evaluate!($g, $df, $dg, $x, $cache) samples=2000
+    t = sort(Float64.(bench.times) ./ 1e3)
+    n = length(t)
+    return (
+        n = n,
+        min = t[1],
+        median = t[cld(n, 2)],
+        p90 = t[clamp(Int(ceil(0.90 * n)), 1, n)],
+        p95 = t[clamp(Int(ceil(0.95 * n)), 1, n)],
+        p99 = t[clamp(Int(ceil(0.99 * n)), 1, n)],
+        max = t[end],
+    )
+end
+
+bench_median_reference_us = (
+    ad = (n = 2000, min = 1.0, median = 1.125, p90 = 1.167, p95 = 1.208, p99 = 1.25, max = 18.292),
+    fd = (n = 2000, min = 0.959, median = 1.084, p90 = 1.167, p95 = 1.167, p99 = 1.25, max = 15.5),
+    cd = (n = 2000, min = 1.0, median = 1.084, p90 = 1.166, p95 = 1.167, p99 = 1.25, max = 20.583),
+    cs = (n = 2000, min = 0.958, median = 1.042, p90 = 1.125, p95 = 1.125, p99 = 1.208, max = 15.416),
+)
+
+bench_median_limits_us = (
+    ad = 2 * bench_median_reference_us.ad.median,
+    fd = 2 * bench_median_reference_us.fd.median,
+    cd = 2 * bench_median_reference_us.cd.median,
+    cs = 2 * bench_median_reference_us.cs.median,
+)
+
+function assert_benchstats(stats, max_median)
+    @test stats.n > 0
+    @test stats.min > 0
+    @test stats.min <= stats.median <= stats.p90 <= stats.p95 <= stats.p99 <= stats.max
+    @test stats.median <= max_median
+end
+
+function assert_runtime_order(stats_ad, stats_fd, stats_cd, stats_cs)
+    # keep comparisons loose enough for shared CI nodes but still catch regressions
+    @test stats_ad.median * 50 >= stats_fd.median
+    @test stats_ad.median * 50 >= stats_cd.median
+    @test stats_ad.median * 50 >= stats_cs.median
+end
+
+sparse_bench_ad = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), ForwardAD()], test1!, nx, ng))
+sparse_bench_fd = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), ForwardFD()], test1!, nx, ng))
+sparse_bench_cd = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), CentralFD()], test1!, nx, ng))
+sparse_bench_cs = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), ComplexStep()], test1!, nx, ng))
+assert_benchstats(sparse_bench_ad, bench_median_limits_us.ad)
+assert_benchstats(sparse_bench_fd, bench_median_limits_us.fd)
+assert_benchstats(sparse_bench_cd, bench_median_limits_us.cd)
+assert_benchstats(sparse_bench_cs, bench_median_limits_us.cs)
+assert_runtime_order(sparse_bench_ad, sparse_bench_fd, sparse_bench_cd, sparse_bench_cs)
 
 # # sparse with zygote and forward
 # dg = zeros(length(sp.rows))

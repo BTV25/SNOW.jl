@@ -1,6 +1,7 @@
 module SNOW
 
 using ForwardDiff
+using DifferentiationInterface
 using ReverseDiff
 # using Zygote
 using DiffResults
