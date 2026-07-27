@@ -136,6 +136,8 @@ options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()])  # revers
 nothing #hide
 ```
 
+The coloring algorithm can be selected with `coloring_algorithm` from SparseMatrixColorings, for example `Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()], coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm(SparseMatrixColorings.SmallestLast()))`.
+
 Currently supported options are ReverseAD, or RevZyg for the gradient, and ForwardAD or FD for the Jacobian.
 
 You can also provide your own derivatives.  For sparse Jacobians there are a wide variety of possible use cases (structure you can take advantage of, mixed-mode AD, using a combination of analytic and AD, etc.), and so for best performance you may want to provide your own.

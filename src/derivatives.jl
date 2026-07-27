@@ -504,14 +504,15 @@ Cache for sparse jacobian using ForwardDiff
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function sparsejacobiancache(sp::SparsePattern, dtype::ForwardAD, func!, nx, ng)
+function sparsejacobiancache(sp::SparsePattern, dtype::ForwardAD, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
 
     Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
     Jwork = sparse(sp.rows, sp.cols, zeros(length(sp.rows)), ng, nx)
     backend = DifferentiationInterface.AutoSparse(
         DifferentiationInterface.AutoForwardDiff();
         sparsity_detector = DifferentiationInterface.ADTypes.KnownJacobianSparsityDetector(Jsp),
-        coloring_algorithm = SparseMatrixColorings.GreedyColoringAlgorithm(),
+        coloring_algorithm = coloring_algorithm,
     )
     cache = (
         prep = DifferentiationInterface.prepare_jacobian(func!, zeros(ng), backend, zeros(nx)),
@@ -602,12 +603,19 @@ Cache for sparse jacobian using finite differencing
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function sparsejacobiancache(sp::SparsePattern, dtype::FD, func!, nx, ng)
+function sparsejacobiancache(sp::SparsePattern, dtype::FD, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
 
     x = zeros(nx)
     Jwork = sparse(sp.rows, sp.cols, zeros(length(sp.rows)), ng, nx)
     fdtype = finitediff_type(dtype)
-    fcache = FiniteDiff.JacobianCache(x, zeros(ng), fdtype, sparsity = Jwork)
+    colors = SparseMatrixColorings.column_colors(SparseMatrixColorings.coloring(
+        Jwork,
+        SparseMatrixColorings.ColoringProblem(; structure = :nonsymmetric, partition = :column),
+        coloring_algorithm,
+    ))
+    fcache = FiniteDiff.JacobianCache(x, zeros(ng), fdtype,
+        colorvec=colors, sparsity=Jwork)
     cache = (fcache = fcache,)
 
     return GradOrJacCache(func!, Jwork, cache, dtype)
@@ -664,9 +672,11 @@ create cache for derivatives when the jacobian is sparse
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function createcache(sp::SparsePattern, dtype::T, func!, nx, ng) where T<:Vector
+function createcache(sp::SparsePattern, dtype::T, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm()) where T<:Vector
     gradcache = gradientcache(dtype[1], func!, nx, ng)
-    jaccache = sparsejacobiancache(sp, dtype[2], func!, nx, ng)
+    jaccache = sparsejacobiancache(sp, dtype[2], func!, nx, ng;
+        coloring_algorithm=coloring_algorithm)
 
     return SparseCache(gradcache, jaccache)
 end
@@ -704,7 +714,8 @@ Cache for sparse jacobian with user-supplied derivatives
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function createcache(sp::SparsePattern, dtype::UserDeriv, func!, nx, ng)
+function createcache(sp::SparsePattern, dtype::UserDeriv, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
     return GradOrJacCache(func!, 0.0, nothing, dtype)
 end
 
@@ -726,4 +737,3 @@ function evaluate!(g, df, dg, x, cache::GradOrJacCache{T1,T2,T3,T4}
     
     return f
 end
-

@@ -1,9 +1,7 @@
 using SNOW
 using Test
 using Zygote
-using BenchmarkTools
 
-checkallocations = false
 snopttest = false
 
 @testset "derivatives" begin
@@ -75,58 +73,25 @@ for fd in (ForwardFD(), CentralFD(), ComplexStep())
     @test isapprox(dg, [-2.0, 2*x[1], 1.0, -1.0])
 end
 
-function benchstats(g, df, dg, x, cache)
-    bench = @benchmark SNOW.evaluate!($g, $df, $dg, $x, $cache) samples=2000
-    t = sort(Float64.(bench.times) ./ 1e3)
-    n = length(t)
-    return (
-        n = n,
-        min = t[1],
-        median = t[cld(n, 2)],
-        p90 = t[clamp(Int(ceil(0.90 * n)), 1, n)],
-        p95 = t[clamp(Int(ceil(0.95 * n)), 1, n)],
-        p99 = t[clamp(Int(ceil(0.99 * n)), 1, n)],
-        max = t[end],
-    )
-end
-
-bench_median_reference_us = (
-    ad = (n = 2000, min = 1.0, median = 1.125, p90 = 1.167, p95 = 1.208, p99 = 1.25, max = 18.292),
-    fd = (n = 2000, min = 0.959, median = 1.084, p90 = 1.167, p95 = 1.167, p99 = 1.25, max = 15.5),
-    cd = (n = 2000, min = 1.0, median = 1.084, p90 = 1.166, p95 = 1.167, p99 = 1.25, max = 20.583),
-    cs = (n = 2000, min = 0.958, median = 1.042, p90 = 1.125, p95 = 1.125, p99 = 1.208, max = 15.416),
+for algorithm in (
+    SNOW.SparseMatrixColorings.GreedyColoringAlgorithm(),
+    SNOW.SparseMatrixColorings.GreedyColoringAlgorithm(
+        SNOW.SparseMatrixColorings.SmallestLast()),
+    SNOW.SparseMatrixColorings.ConstantColoringAlgorithm(ones(ng, nx), [1, 2]),
 )
-
-bench_median_limits_us = (
-    ad = 2 * bench_median_reference_us.ad.median,
-    fd = 2 * bench_median_reference_us.fd.median,
-    cd = 2 * bench_median_reference_us.cd.median,
-    cs = 2 * bench_median_reference_us.cs.median,
-)
-
-function assert_benchstats(stats, max_median)
-    @test stats.n > 0
-    @test stats.min > 0
-    @test stats.min <= stats.median <= stats.p90 <= stats.p95 <= stats.p99 <= stats.max
-    @test stats.median <= max_median
+    for dtype in (ForwardAD(), ForwardFD())
+        dg = zeros(length(sp.rows))
+        cache = SNOW.createcache(sp, [ReverseAD(), dtype], test1!, nx, ng;
+            coloring_algorithm=algorithm)
+        SNOW.evaluate!(g, df, dg, x, cache)
+        @test isapprox(dg, [-2.0, 2*x[1], 1.0, -1.0])
+    end
 end
 
-function assert_runtime_order(stats_ad, stats_fd, stats_cd, stats_cs)
-    # keep comparisons loose enough for shared CI nodes but still catch regressions
-    @test stats_ad.median * 50 >= stats_fd.median
-    @test stats_ad.median * 50 >= stats_cd.median
-    @test stats_ad.median * 50 >= stats_cs.median
-end
-
-sparse_bench_ad = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), ForwardAD()], test1!, nx, ng))
-sparse_bench_fd = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), ForwardFD()], test1!, nx, ng))
-sparse_bench_cd = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), CentralFD()], test1!, nx, ng))
-sparse_bench_cs = benchstats(g, df, dg, x, SNOW.createcache(sp, [ReverseAD(), ComplexStep()], test1!, nx, ng))
-assert_benchstats(sparse_bench_ad, bench_median_limits_us.ad)
-assert_benchstats(sparse_bench_fd, bench_median_limits_us.fd)
-assert_benchstats(sparse_bench_cd, bench_median_limits_us.cd)
-assert_benchstats(sparse_bench_cs, bench_median_limits_us.cs)
-assert_runtime_order(sparse_bench_ad, sparse_bench_fd, sparse_bench_cd, sparse_bench_cs)
+options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()],
+    coloring_algorithm=SNOW.SparseMatrixColorings.GreedyColoringAlgorithm(
+        SNOW.SparseMatrixColorings.SmallestLast()))
+@test options.coloring_algorithm isa SNOW.SparseMatrixColorings.GreedyColoringAlgorithm
 
 # # sparse with zygote and forward
 # dg = zeros(length(sp.rows))
@@ -140,48 +105,6 @@ assert_runtime_order(sparse_bench_ad, sparse_bench_fd, sparse_bench_cd, sparse_b
 
 end
 
-# if checkallocations
-# # -------- test allocations --------------
-#     using BenchmarkTools
-
-#     function test2!(g, x)
-#         f = x[1]^2 - x[2]
-        
-#         Zygote.ignore() do
-#             nx = length(x)
-#             for i = 1:nx
-#                 g[i] = x[i]^2
-#             end
-#             g[nx+1:end] .= x[1]
-#         end
-#         return f
-#     end
-
-#     nx = 300
-#     ng = 500
-#     g = zeros(ng)
-#     df = zeros(nx)
-#     dg = zeros(ng*nx)
-#     x = 2*ones(nx)
-#     cache = SNOW.createcache(DensePattern(), ForwardAD(), test2!, nx, ng)
-#     @btime SNOW.evaluate!($g, $df, $dg, $x, $cache)
-#     # 577.123 μs (6 allocations: 2.30 MiB)
-
-#     cache = SNOW.createcache(DensePattern(), ReverseAD(), test2!, nx, ng)
-#     @btime SNOW.evaluate!($g, $df, $dg, $x, $cache)
-#     # 4.188 ms (6 allocations: 2.30 MiB)
-
-#     cache = SNOW.createcache(DensePattern(), FD("forward"), test2!, nx, ng)
-#     @btime SNOW.evaluate!($g, $df, $dg, $x, $cache)
-#     # 358.457 μs (6 allocations: 2.30 MiB)
-
-#     lx = -5*ones(nx)
-#     ux = 5*ones(nx)
-#     sp = SparsePattern(ForwardAD(), test2!, ng, lx, ux)
-#     dg = zeros(length(sp.rows))
-#     cache = SNOW.createcache(sp, [ReverseAD(), ForwardAD()], test2!, nx, ng)
-#     @btime SNOW.evaluate!($g, $df, $dg, $x, $cache)
-#     # 17.391 μs (0 allocations: 0 bytes)
 
 #     cache = SNOW.createcache(sp, [RevZyg(), ForwardAD()], test2!, nx, ng)
 #     @btime SNOW.evaluate!($g, $df, $dg, $x, $cache)

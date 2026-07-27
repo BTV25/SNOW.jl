@@ -4,7 +4,6 @@ authors = ["Andrew Ning <aning@byu.edu> and contributors"]
 version = "0.3.2"
 
 [deps]
-BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 DiffResults = "163ba53b-c6d8-5494-b064-1a9d43ac40c5"
 DifferentiationInterface = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
 FiniteDiff = "6a86dc24-6348-571c-b903-95158fe2bd41"
@@ -27,9 +26,8 @@ SparseMatrixColorings = "0.3, 0.4"
 julia = "1.10"
 
 [extras]
-BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [targets]
-test = ["Test", "BenchmarkTools", "Zygote"]
+test = ["Test", "Zygote"]
