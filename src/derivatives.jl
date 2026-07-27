@@ -659,11 +659,11 @@ function sparsejacobiancache(sp::SparsePattern, dtype::FD, func!, nx, ng)
     g = zeros(ng)
     x = zeros(nx)
     Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
-    colors = SparseMatrixColorings.fast_coloring(
+    colors = SparseMatrixColorings.column_colors(SparseMatrixColorings.coloring(
         Jsp,
         SparseMatrixColorings.ColoringProblem(; structure=:nonsymmetric, partition=:column),
         dtype.coloring_algorithm,
-    )
+    ))
     fdtype = finitediff_type(dtype)
     cache = FiniteDiff.JacobianCache(x, g, fdtype, colorvec=colors, sparsity=Jsp)
 

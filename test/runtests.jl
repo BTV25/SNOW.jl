@@ -3,6 +3,7 @@ using Test
 using Zygote
 using ForwardDiff
 using SparseArrays
+using SparseMatrixColorings
 
 checkallocations = false
 snopttest = false
@@ -194,6 +195,25 @@ dgfd = zeros(length(sp.rows))
 SNOW.sparsejacobian!(dgfd, x, cachefd)
 Jsparsefd = Matrix(sparse(sp.rows, sp.cols, dgfd, ng, nx))
 @test isapprox(Jsparsefd, Jdense; atol=1e-4)
+
+# a user-supplied precomputed coloring (not a GreedyColoringAlgorithm) should
+# also work, exercising the fully generic ADTypes.AbstractColoringAlgorithm path
+Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
+constalg = SparseMatrixColorings.ConstantColoringAlgorithm(Jsp, [mod1(i, 3) for i in 1:nx])
+
+dtypeconst = ForwardAD(coloring_algorithm=constalg)
+cacheconst = SNOW.sparsejacobiancache(sp, dtypeconst, tridiagonal!, nx, ng)
+dgconst = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dgconst, x, cacheconst)
+Jsparseconst = Matrix(sparse(sp.rows, sp.cols, dgconst, ng, nx))
+@test isapprox(Jsparseconst, Jdense; atol=1e-8)
+
+dtypefdconst = ForwardFD(coloring_algorithm=constalg)
+cachefdconst = SNOW.sparsejacobiancache(sp, dtypefdconst, tridiagonal!, nx, ng)
+dgfdconst = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dgfdconst, x, cachefdconst)
+Jsparsefdconst = Matrix(sparse(sp.rows, sp.cols, dgfdconst, ng, nx))
+@test isapprox(Jsparsefdconst, Jdense; atol=1e-4)
 
 end
 
