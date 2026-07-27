@@ -9,27 +9,30 @@ abstract type AbstractDiffMethod end
 Default coloring algorithm for sparse Jacobians: natural column order,
 matching the cheapest one-time cache-construction cost.
 
-For an alternative that tries both the natural order and the smallest-last
-order (keeping whichever gives fewer colors - never worse than natural
-order alone, sometimes meaningfully better, e.g. ~20% fewer colors on some
-real-world sparsity patterns, at a several-times-higher one-time cache
-construction cost), use [`BEST_OF_COLORING_ALGORITHM`](@ref).
+For an alternative that tries several orderings (keeping whichever gives
+fewer colors - never worse than natural order alone, sometimes meaningfully
+better, e.g. ~20% fewer colors on some real-world sparsity patterns, at a
+several-times-higher one-time cache construction cost), use
+[`BEST_OF_COLORING_ALGORITHM`](@ref).
 """
 const DEFAULT_COLORING_ALGORITHM = SparseMatrixColorings.GreedyColoringAlgorithm(
     SparseMatrixColorings.NaturalOrder(),
 )
 
 """
-Coloring algorithm that tries both the natural column order and the
-smallest-last order, keeping whichever gives fewer colors. Fewer colors
-means fewer function calls per Jacobian evaluation, at the cost of a
-several-times-higher one-time cache construction cost. Pass to
-`coloring_algorithm` on `ForwardAD`/`ForwardFD`/`CentralFD`/`ComplexStep`
-to opt in.
+Coloring algorithm that tries the natural column order, smallest-last,
+dynamic-largest-first, and incidence-degree orderings, keeping whichever
+gives fewest colors. Fewer colors means fewer function calls per Jacobian
+evaluation, at the cost of a several-times-higher one-time cache
+construction cost. Pass to `coloring_algorithm` on
+`ForwardAD`/`ForwardFD`/`CentralFD`/`ComplexStep` to opt in.
 """
-const BEST_OF_COLORING_ALGORITHM = SparseMatrixColorings.GreedyColoringAlgorithm(
-    (SparseMatrixColorings.NaturalOrder(), SparseMatrixColorings.SmallestLast()),
-)
+const BEST_OF_COLORING_ALGORITHM = SparseMatrixColorings.GreedyColoringAlgorithm((
+    SparseMatrixColorings.NaturalOrder(),
+    SparseMatrixColorings.SmallestLast(),
+    SparseMatrixColorings.DynamicLargestFirst(),
+    SparseMatrixColorings.IncidenceDegree(),
+))
 
 """
     ForwardAD(; coloring_algorithm=DEFAULT_COLORING_ALGORITHM)
