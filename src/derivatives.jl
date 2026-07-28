@@ -504,15 +504,23 @@ Cache for sparse jacobian using ForwardDiff
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function sparsejacobiancache(sp::SparsePattern, dtype::ForwardAD, func!, nx, ng)
+function sparsejacobiancache(sp::SparsePattern, dtype::ForwardAD, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
 
-    g = zeros(ng)
-    x = zeros(nx)
-    Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)))
-    colors = SparseDiffTools.matrix_colors(Jsp)
-    cachesp = SparseDiffTools.ForwardColorJacCache(func!, x, dx=g, colorvec=colors, sparsity=Jsp)
+    Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
+    Jwork = sparse(sp.rows, sp.cols, zeros(length(sp.rows)), ng, nx)
+    backend = DifferentiationInterface.AutoSparse(
+        DifferentiationInterface.AutoForwardDiff();
+        sparsity_detector = DifferentiationInterface.ADTypes.KnownJacobianSparsityDetector(Jsp),
+        coloring_algorithm = coloring_algorithm,
+    )
+    cache = (
+        prep = DifferentiationInterface.prepare_jacobian(func!, zeros(ng), backend, zeros(nx)),
+        backend = backend,
+        y = zeros(ng),
+    )
 
-    return GradOrJacCache(func!, Jsp, cachesp, dtype)
+    return GradOrJacCache(func!, Jwork, cache, dtype)
 end
 
 
@@ -528,8 +536,15 @@ evaluate sparse jacobian using ForwardDiff
 """
 function sparsejacobian!(dg, x, cache::GradOrJacCache{T1,T2,T3,T4}
     where {T1,T2,T3,T4<:ForwardAD})
-    
-    SparseDiffTools.forwarddiff_color_jacobian!(cache.work, cache.f!, x, cache.cache)
+
+    DifferentiationInterface.jacobian!(
+        cache.f!,
+        cache.cache.y,
+        cache.work,
+        cache.cache.prep,
+        cache.cache.backend,
+        x,
+    )
     dg[:] = cache.work.nzval
 
     return nothing
@@ -579,7 +594,7 @@ end
 # end
 
 """
-    sparsejacobiancache(sp::SparsePattern, dtype::ForwardAD, func!, nx, ng)
+    sparsejacobiancache(sp::SparsePattern, dtype::FD, func!, nx, ng)
 
 Cache for sparse jacobian using finite differencing
 
@@ -588,16 +603,22 @@ Cache for sparse jacobian using finite differencing
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function sparsejacobiancache(sp::SparsePattern, dtype::FD, func!, nx, ng)
+function sparsejacobiancache(sp::SparsePattern, dtype::FD, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
 
-    g = zeros(ng)
     x = zeros(nx)
-    Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)))
-    colors = SparseDiffTools.matrix_colors(Jsp)
+    Jwork = sparse(sp.rows, sp.cols, zeros(length(sp.rows)), ng, nx)
     fdtype = finitediff_type(dtype)
-    cache = FiniteDiff.JacobianCache(x, fdtype, colorvec=colors, sparsity=Jsp)
+    colors = SparseMatrixColorings.column_colors(SparseMatrixColorings.coloring(
+        Jwork,
+        SparseMatrixColorings.ColoringProblem(; structure = :nonsymmetric, partition = :column),
+        coloring_algorithm,
+    ))
+    fcache = FiniteDiff.JacobianCache(x, zeros(ng), fdtype,
+        colorvec=colors, sparsity=Jwork)
+    cache = (fcache = fcache,)
 
-    return GradOrJacCache(func!, Jsp, cache, dtype)
+    return GradOrJacCache(func!, Jwork, cache, dtype)
 end
 
 
@@ -614,7 +635,7 @@ evaluate sparse jacobian using finite differencing
 function sparsejacobian!(dg, x, cache::GradOrJacCache{T1,T2,T3,T4}
     where {T1,T2,T3,T4<:FD})
 
-    FiniteDiff.finite_difference_jacobian!(cache.work, cache.f!, x, cache.cache)
+    FiniteDiff.finite_difference_jacobian!(cache.work, cache.f!, x, cache.cache.fcache)
     dg[:] = cache.work.nzval
     
     return nothing
@@ -651,9 +672,11 @@ create cache for derivatives when the jacobian is sparse
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function createcache(sp::SparsePattern, dtype::T, func!, nx, ng) where T<:Vector
+function createcache(sp::SparsePattern, dtype::T, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm()) where T<:Vector
     gradcache = gradientcache(dtype[1], func!, nx, ng)
-    jaccache = sparsejacobiancache(sp, dtype[2], func!, nx, ng)
+    jaccache = sparsejacobiancache(sp, dtype[2], func!, nx, ng;
+        coloring_algorithm=coloring_algorithm)
 
     return SparseCache(gradcache, jaccache)
 end
@@ -691,7 +714,8 @@ Cache for sparse jacobian with user-supplied derivatives
 - `nx::Int`: number of design variables
 - `ng::Int`: number of constraints
 """
-function createcache(sp::SparsePattern, dtype::UserDeriv, func!, nx, ng)
+function createcache(sp::SparsePattern, dtype::UserDeriv, func!, nx, ng;
+    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
     return GradOrJacCache(func!, 0.0, nothing, dtype)
 end
 
@@ -713,4 +737,3 @@ function evaluate!(g, df, dg, x, cache::GradOrJacCache{T1,T2,T3,T4}
     
     return f
 end
-

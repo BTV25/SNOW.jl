@@ -1,12 +1,13 @@
 module SNOW
 
 using ForwardDiff
+using DifferentiationInterface
 using ReverseDiff
 # using Zygote
 using DiffResults
 using FiniteDiff
 using SparseArrays
-using SparseDiffTools
+using SparseMatrixColorings
 using Requires
 using Ipopt
 
