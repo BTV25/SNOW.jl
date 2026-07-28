@@ -181,7 +181,30 @@ nothing #hide
 
 There's no single ordering that's always best - it depends on the sparsity structure of your problem. If cache construction time isn't a concern (it's a one-time cost, paid once per problem rather than once per Jacobian evaluation), trying a tuple of several orderings like `alg4` above is a reasonable way to get a good coloring without having to guess which heuristic suits your specific problem.
 
-You can also supply your own precomputed coloring via `SparseMatrixColorings.ConstantColoringAlgorithm`, which is any `ADTypes.AbstractColoringAlgorithm` too - useful if you already know a good coloring for your problem's sparsity pattern and want to skip the one-time coloring computation entirely.
+You can also supply your own precomputed coloring via `SparseMatrixColorings.ConstantColoringAlgorithm`, which is any `ADTypes.AbstractColoringAlgorithm` too. Unlike the algorithms above, it isn't really a coloring *algorithm* - it just returns whatever color vector you hand it, verbatim, skipping the one-time coloring computation entirely:
+
+```@example sp
+using SparseArrays
+
+nx = length(lx)
+Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
+
+# a coloring you already know is valid for this sparsity pattern - e.g.
+# computed once and reused, or obvious from problem structure (banded,
+# block-diagonal, etc.). Here we just compute one with a real algorithm
+# to keep the example itself correct.
+known_good_coloring = SparseMatrixColorings.column_colors(SparseMatrixColorings.coloring(
+    Jsp,
+    SparseMatrixColorings.ColoringProblem(; structure=:nonsymmetric, partition=:column),
+    SparseMatrixColorings.GreedyColoringAlgorithm(),
+))
+constalg = SparseMatrixColorings.ConstantColoringAlgorithm(Jsp, known_good_coloring)
+
+options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD(coloring_algorithm=constalg)])
+nothing #hide
+```
+
+**Use this with caution.** `ConstantColoringAlgorithm` does not verify that the coloring you provide is actually valid for the given sparsity pattern - per its own documentation, "this is the responsibility of the user." If two columns sharing a color also share a nonzero row, `sparsejacobian!` will silently compute a **wrong Jacobian**, with no error or warning. It's also static: if your sparsity pattern ever changes (different problem size, different `SparsePattern`), a stale color vector won't adapt - you'd need to recompute and supply a new one yourself. Only reach for this if you can guarantee the coloring is correct for your exact sparsity pattern, and it isn't going to change out from under you.
 
 You can also provide your own derivatives.  For sparse Jacobians there are a wide variety of possible use cases (structure you can take advantage of, mixed-mode AD, using a combination of analytic and AD, etc.), and so for best performance you may want to provide your own.
 ```@example sp
