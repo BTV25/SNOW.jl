@@ -10,7 +10,7 @@ end
 
 """
     Options(;sparsity=DensePattern(), derivatives=ForwardFD(), solver=IPOPT(),
-        coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
+        coloring_algorithm=DEFAULT_COLORING_ALGORITHM)
 
 Options for SNOW.  Default is dense, forward finite differencing, and IPOPT.
 
@@ -34,7 +34,7 @@ Options(sparsity, derivatives, solver) =
 
 # defaults
 Options(; sparsity=DensePattern(), derivatives=ForwardFD(), solver=IPOPT(),
-    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm()
+    coloring_algorithm=DEFAULT_COLORING_ALGORITHM
     ) = Options(sparsity, derivatives, solver, coloring_algorithm)
 
 

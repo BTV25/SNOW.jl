@@ -16,6 +16,40 @@ struct UserDeriv <: AbstractDiffMethod end   # user-specified derivatives
 FD = Union{ForwardFD, CentralFD, ComplexStep}
 
 """
+Default coloring algorithm for sparse Jacobians: natural column order,
+matching the cheapest one-time cache-construction cost.
+
+For an alternative that tries several orderings (keeping whichever gives
+fewer colors - never worse than natural order alone, sometimes meaningfully
+better, e.g. ~20% fewer colors on some real-world sparsity patterns, at a
+several-times-higher one-time cache construction cost), use
+[`BEST_OF_COLORING_ALGORITHM`](@ref).
+"""
+const DEFAULT_COLORING_ALGORITHM = SparseMatrixColorings.GreedyColoringAlgorithm(
+    SparseMatrixColorings.NaturalOrder(),
+)
+
+"""
+Coloring algorithm that tries the natural column order, smallest-last,
+dynamic-largest-first, and incidence-degree orderings, keeping whichever
+gives fewest colors. Fewer colors means fewer function calls per Jacobian
+evaluation, at the cost of a several-times-higher one-time cache
+construction cost. Pass to `coloring_algorithm` on `sparsejacobiancache`,
+`createcache`, or `Options` to opt in.
+
+Note this is still just the best of these four heuristics, not a
+guaranteed globally-minimal coloring (that's an NP-hard problem) - other
+orderings not included here could still occasionally do better on a given
+sparsity pattern.
+"""
+const BEST_OF_COLORING_ALGORITHM = SparseMatrixColorings.GreedyColoringAlgorithm((
+    SparseMatrixColorings.NaturalOrder(),
+    SparseMatrixColorings.SmallestLast(),
+    SparseMatrixColorings.DynamicLargestFirst(),
+    SparseMatrixColorings.IncidenceDegree(),
+))
+
+"""
 convert to type used in FiniteDiff package
 """
 function finitediff_type(dtype)
@@ -505,7 +539,7 @@ Cache for sparse jacobian using ForwardDiff
 - `ng::Int`: number of constraints
 """
 function sparsejacobiancache(sp::SparsePattern, dtype::ForwardAD, func!, nx, ng;
-    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
+    coloring_algorithm=DEFAULT_COLORING_ALGORITHM)
 
     Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
     Jwork = sparse(sp.rows, sp.cols, zeros(length(sp.rows)), ng, nx)
@@ -604,7 +638,7 @@ Cache for sparse jacobian using finite differencing
 - `ng::Int`: number of constraints
 """
 function sparsejacobiancache(sp::SparsePattern, dtype::FD, func!, nx, ng;
-    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
+    coloring_algorithm=DEFAULT_COLORING_ALGORITHM)
 
     x = zeros(nx)
     Jwork = sparse(sp.rows, sp.cols, zeros(length(sp.rows)), ng, nx)
@@ -673,7 +707,7 @@ create cache for derivatives when the jacobian is sparse
 - `ng::Int`: number of constraints
 """
 function createcache(sp::SparsePattern, dtype::T, func!, nx, ng;
-    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm()) where T<:Vector
+    coloring_algorithm=DEFAULT_COLORING_ALGORITHM) where T<:Vector
     gradcache = gradientcache(dtype[1], func!, nx, ng)
     jaccache = sparsejacobiancache(sp, dtype[2], func!, nx, ng;
         coloring_algorithm=coloring_algorithm)
@@ -715,7 +749,7 @@ Cache for sparse jacobian with user-supplied derivatives
 - `ng::Int`: number of constraints
 """
 function createcache(sp::SparsePattern, dtype::UserDeriv, func!, nx, ng;
-    coloring_algorithm=SparseMatrixColorings.GreedyColoringAlgorithm())
+    coloring_algorithm=DEFAULT_COLORING_ALGORITHM)
     return GradOrJacCache(func!, 0.0, nothing, dtype)
 end
 
