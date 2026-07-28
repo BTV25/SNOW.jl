@@ -1,5 +1,6 @@
 module SNOW
 
+using ADTypes
 using ForwardDiff
 using DifferentiationInterface
 using ReverseDiff

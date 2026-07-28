@@ -82,19 +82,16 @@ for algorithm in (
         SNOW.SparseMatrixColorings.SmallestLast()),
     SNOW.SparseMatrixColorings.ConstantColoringAlgorithm(ones(ng, nx), [1, 2]),
 )
-    for dtype in (ForwardAD(), ForwardFD())
+    for dtype in (ForwardAD(coloring_algorithm=algorithm), ForwardFD(coloring_algorithm=algorithm))
         dg = zeros(length(sp.rows))
-        cache = SNOW.createcache(sp, [ReverseAD(), dtype], test1!, nx, ng;
-            coloring_algorithm=algorithm)
+        cache = SNOW.createcache(sp, [ReverseAD(), dtype], test1!, nx, ng)
         SNOW.evaluate!(g, df, dg, x, cache)
         @test isapprox(dg, [-2.0, 2*x[1], 1.0, -1.0])
     end
 end
 
-options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()],
-    coloring_algorithm=SNOW.SparseMatrixColorings.GreedyColoringAlgorithm(
-        SNOW.SparseMatrixColorings.SmallestLast()))
-@test options.coloring_algorithm isa SNOW.SparseMatrixColorings.GreedyColoringAlgorithm
+@test ForwardAD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+@test ForwardFD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
 
 # # sparse with zygote and forward
 # dg = zeros(length(sp.rows))
@@ -209,23 +206,40 @@ sp = SparsePattern(ForwardAD(), tridiagonal!, ng, lx, ux)
 x = collect(range(0.2, 1.7, length=nx))
 Jdense = ForwardDiff.jacobian(tridiagonal!, zeros(ng), x)
 
-cache = SNOW.sparsejacobiancache(sp, ForwardAD(), tridiagonal!, nx, ng;
-    coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+dtype = ForwardAD(coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+@test dtype.coloring_algorithm === BEST_OF_COLORING_ALGORITHM
+cache = SNOW.sparsejacobiancache(sp, dtype, tridiagonal!, nx, ng)
 dg = zeros(length(sp.rows))
 SNOW.sparsejacobian!(dg, x, cache)
 Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
 @test isapprox(Jsparse, Jdense; atol=1e-8)
 
-cachefd = SNOW.sparsejacobiancache(sp, ForwardFD(), tridiagonal!, nx, ng;
-    coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+dtypefd = ForwardFD(coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+@test dtypefd.coloring_algorithm === BEST_OF_COLORING_ALGORITHM
+cachefd = SNOW.sparsejacobiancache(sp, dtypefd, tridiagonal!, nx, ng)
 dgfd = zeros(length(sp.rows))
 SNOW.sparsejacobian!(dgfd, x, cachefd)
 Jsparsefd = Matrix(sparse(sp.rows, sp.cols, dgfd, ng, nx))
 @test isapprox(Jsparsefd, Jdense; atol=1e-4)
 
-options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()],
-    coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
-@test options.coloring_algorithm === BEST_OF_COLORING_ALGORITHM
+# a user-supplied precomputed coloring (not a GreedyColoringAlgorithm) should
+# also work, exercising the fully generic ADTypes.AbstractColoringAlgorithm path
+Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
+constalg = SparseMatrixColorings.ConstantColoringAlgorithm(Jsp, [mod1(i, 3) for i in 1:nx])
+
+dtypeconst = ForwardAD(coloring_algorithm=constalg)
+cacheconst = SNOW.sparsejacobiancache(sp, dtypeconst, tridiagonal!, nx, ng)
+dgconst = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dgconst, x, cacheconst)
+Jsparseconst = Matrix(sparse(sp.rows, sp.cols, dgconst, ng, nx))
+@test isapprox(Jsparseconst, Jdense; atol=1e-8)
+
+dtypefdconst = ForwardFD(coloring_algorithm=constalg)
+cachefdconst = SNOW.sparsejacobiancache(sp, dtypefdconst, tridiagonal!, nx, ng)
+dgfdconst = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dgfdconst, x, cachefdconst)
+Jsparsefdconst = Matrix(sparse(sp.rows, sp.cols, dgfdconst, ng, nx))
+@test isapprox(Jsparsefdconst, Jdense; atol=1e-4)
 
 end
 

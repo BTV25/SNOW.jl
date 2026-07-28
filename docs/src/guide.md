@@ -142,13 +142,13 @@ Currently supported options are ReverseAD, or RevZyg for the gradient, and Forwa
 
 Sparse Jacobians are computed using graph coloring: columns (or rows) that don't share any nonzero entries are grouped into the same "color" and perturbed together, so the number of function calls per Jacobian evaluation equals the number of colors rather than the number of design variables. Fewer colors means faster evaluations, but finding the minimum possible number of colors is itself an expensive combinatorial problem, so in practice a greedy heuristic is used, and different heuristics trade off coloring quality against the one-time cost of computing the coloring when the cache is built.
 
-`Options`, `createcache`, and `sparsejacobiancache` all accept a `coloring_algorithm` keyword to control this trade-off. It accepts any `ADTypes.AbstractColoringAlgorithm`, most conveniently one of the `SparseMatrixColorings.GreedyColoringAlgorithm` variants ([SparseMatrixColorings.jl docs](https://gdalle.github.io/SparseMatrixColorings.jl/stable/)). SNOW exports two ready-made choices:
+`ForwardAD`, `ForwardFD`, `CentralFD`, and `ComplexStep` all accept a `coloring_algorithm` keyword to control this trade-off. It accepts any `ADTypes.AbstractColoringAlgorithm`, most conveniently one of the `SparseMatrixColorings.GreedyColoringAlgorithm` variants ([SparseMatrixColorings.jl docs](https://gdalle.github.io/SparseMatrixColorings.jl/stable/)). SNOW exports two ready-made choices:
 
 - `DEFAULT_COLORING_ALGORITHM` (the default if you don't specify anything): natural column order. Cheapest possible coloring construction cost.
 - `BEST_OF_COLORING_ALGORITHM`: tries the natural order, smallest-last, dynamic-largest-first, and incidence-degree orderings, keeping whichever produces fewer colors. Never worse than the default, sometimes meaningfully better (e.g. ~20% fewer colors on some real-world sparsity patterns), at a several-times-higher one-time construction cost - usually worthwhile unless your optimization only runs for a handful of iterations. Note this is still just the best of these four heuristics, not a guaranteed globally-minimal coloring (that's an NP-hard problem) - other orderings not included here could still occasionally do better on a given sparsity pattern.
 
 ```@example sp
-options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()], coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD(coloring_algorithm=BEST_OF_COLORING_ALGORITHM)])
 nothing #hide
 ```
 
@@ -175,7 +175,7 @@ alg4 = SparseMatrixColorings.GreedyColoringAlgorithm((
     SparseMatrixColorings.IncidenceDegree(),
 ))
 
-options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()], coloring_algorithm=alg1)
+options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD(coloring_algorithm=alg1)])
 nothing #hide
 ```
 

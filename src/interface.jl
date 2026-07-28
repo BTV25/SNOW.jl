@@ -9,33 +9,26 @@ function optimize(solver::AbstractSolver, cache, x0, lx, ux, lg, ug, rows, cols)
 end
 
 """
-    Options(;sparsity=DensePattern(), derivatives=ForwardFD(), solver=IPOPT(),
-        coloring_algorithm=DEFAULT_COLORING_ALGORITHM)
+    Options(;sparsity=DensePattern(), derivatives=ForwardFD(), solver=IPOPT())
 
 Options for SNOW.  Default is dense, forward finite differencing, and IPOPT.
 
 # Arguments
 - `sparsity::AbstractSparsityPattern`: specify sparsity pattern
 - `derivatives::AbstractDiffMethod`: specific differentiation methods to use
-    or `derivatives::Vector{AbstractDiffMethod}`: vector of length two, 
+    or `derivatives::Vector{AbstractDiffMethod}`: vector of length two,
     first for gradient differentiation method, second for jacobian differentiation method
 - `solver::AbstractSolver`: specificy which optimizer to use
-- `coloring_algorithm`: algorithm used for sparse Jacobian coloring
 """
-struct Options{T1,T2,T3,T4}
+struct Options{T1,T2,T3}
     sparsity::T1  # AbstractSparsityPattern
     derivatives::T2  # AbstractDiffMethod
     solver::T3  # AbstractSolver
-    coloring_algorithm::T4
 end
 
-Options(sparsity, derivatives, solver) =
-    Options(sparsity, derivatives, solver, SparseMatrixColorings.GreedyColoringAlgorithm())
-
 # defaults
-Options(; sparsity=DensePattern(), derivatives=ForwardFD(), solver=IPOPT(),
-    coloring_algorithm=DEFAULT_COLORING_ALGORITHM
-    ) = Options(sparsity, derivatives, solver, coloring_algorithm)
+Options(; sparsity=DensePattern(), derivatives=ForwardFD(), solver=IPOPT()
+    ) = Options(sparsity, derivatives, solver)
 
 
 # private convenience method to size bounds of length 1 to required length
@@ -71,12 +64,7 @@ function minimize(func!, x0, ng, lx=-Inf, ux=Inf, lg=-Inf, ug=0.0, options=Optio
     ug = resizebounds(ug, ng)
     
     # create cache
-    cache = if options.sparsity isa SparsePattern
-        createcache(options.sparsity, options.derivatives, func!, nx, ng;
-            coloring_algorithm=options.coloring_algorithm)
-    else
-        createcache(options.sparsity, options.derivatives, func!, nx, ng)
-    end
+    cache = createcache(options.sparsity, options.derivatives, func!, nx, ng)
 
     # determine sparsity pattern
     rows, cols = getsparsity(options.sparsity, nx, ng)

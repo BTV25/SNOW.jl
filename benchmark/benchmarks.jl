@@ -61,14 +61,15 @@ function make_benchmark(dmode::Symbol, algorithm::Symbol)
     df = zeros(nx)
     sp = make_pattern(nx)
     dg = zeros(length(sp.rows))
-    method = dmode == :fd ? [SNOW.ReverseAD(), SNOW.ForwardFD()] : [SNOW.ReverseAD(), SNOW.ForwardAD()]
-
-    cache = if algorithm == :legacy
-        SNOW.createcache(sp, method, test2!, nx, ng)
+    method = if algorithm == :legacy
+        dmode == :fd ? [SNOW.ReverseAD(), SNOW.ForwardFD()] : [SNOW.ReverseAD(), SNOW.ForwardAD()]
     else
-        SNOW.createcache(sp, method, test2!, nx, ng;
-            coloring_algorithm=coloring_algorithm(algorithm, nx))
+        alg = coloring_algorithm(algorithm, nx)
+        dmode == :fd ? [SNOW.ReverseAD(), SNOW.ForwardFD(coloring_algorithm=alg)] :
+            [SNOW.ReverseAD(), SNOW.ForwardAD(coloring_algorithm=alg)]
     end
+
+    cache = SNOW.createcache(sp, method, test2!, nx, ng)
 
     SNOW.evaluate!(g, df, dg, x, cache)
     return @benchmarkable SNOW.evaluate!($g, $df, $dg, $x, $cache) samples=BENCH_NSAMPLES evals=BENCH_NEVALS
