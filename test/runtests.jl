@@ -82,7 +82,12 @@ for algorithm in (
         SNOW.SparseMatrixColorings.SmallestLast()),
     SNOW.SparseMatrixColorings.ConstantColoringAlgorithm(ones(ng, nx), [1, 2]),
 )
-    for dtype in (ForwardAD(coloring_algorithm=algorithm), ForwardFD(coloring_algorithm=algorithm))
+    for dtype in (
+        ForwardAD(coloring_algorithm=algorithm),
+        ForwardFD(coloring_algorithm=algorithm),
+        CentralFD(coloring_algorithm=algorithm),
+        ComplexStep(coloring_algorithm=algorithm),
+    )
         dg = zeros(length(sp.rows))
         cache = SNOW.createcache(sp, [ReverseAD(), dtype], test1!, nx, ng)
         SNOW.evaluate!(g, df, dg, x, cache)
@@ -92,6 +97,53 @@ end
 
 @test ForwardAD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
 @test ForwardFD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+@test CentralFD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+@test ComplexStep().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+
+# user-supplied derivatives (no AD/FD at all) - dense and sparse
+function userderiv_dense!(g, df, Jac, x)
+    f = x[1]^2 - x[2]
+    g[1] = x[2] - 2*x[1]
+    g[2] = -x[2]
+    g[3] = x[1]^2
+    df[1] = 2*x[1]
+    df[2] = -1.0
+    Jac[1,1] = -2.0
+    Jac[1,2] = 1.0
+    Jac[2,1] = 0.0
+    Jac[2,2] = -1.0
+    Jac[3,1] = 2*x[1]
+    Jac[3,2] = 0.0
+    return f
+end
+
+dg = zeros(ng*nx)
+cache = SNOW.createcache(DensePattern(), UserDeriv(), userderiv_dense!, nx, ng)
+SNOW.evaluate!(g, df, dg, x, cache)
+@test df == [2*x[1]; -1.0]
+@test dg == [-2.0, 0.0, 2*x[1], 1.0, -1.0, 0.0]
+
+# user-supplied derivatives, sparse: dg is a vector in sp.rows/sp.cols order
+# (sp.rows == [1, 3, 1, 2], sp.cols == [1, 1, 2, 2])
+function userderiv_sparse!(g, df, dg, x)
+    f = x[1]^2 - x[2]
+    g[1] = x[2] - 2*x[1]
+    g[2] = -x[2]
+    g[3] = x[1]^2
+    df[1] = 2*x[1]
+    df[2] = -1.0
+    dg[1] = -2.0
+    dg[2] = 2*x[1]
+    dg[3] = 1.0
+    dg[4] = -1.0
+    return f
+end
+
+dg = zeros(length(sp.rows))
+cache = SNOW.createcache(sp, UserDeriv(), userderiv_sparse!, nx, ng)
+SNOW.evaluate!(g, df, dg, x, cache)
+@test df == [2*x[1]; -1.0]
+@test dg == [-2.0, 2*x[1], 1.0, -1.0]
 
 # # sparse with zygote and forward
 # dg = zeros(length(sp.rows))
@@ -214,13 +266,15 @@ SNOW.sparsejacobian!(dg, x, cache)
 Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
 @test isapprox(Jsparse, Jdense; atol=1e-8)
 
-dtypefd = ForwardFD(coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
-@test dtypefd.coloring_algorithm === BEST_OF_COLORING_ALGORITHM
-cachefd = SNOW.sparsejacobiancache(sp, dtypefd, tridiagonal!, nx, ng)
-dgfd = zeros(length(sp.rows))
-SNOW.sparsejacobian!(dgfd, x, cachefd)
-Jsparsefd = Matrix(sparse(sp.rows, sp.cols, dgfd, ng, nx))
-@test isapprox(Jsparsefd, Jdense; atol=1e-4)
+for FDType in (ForwardFD, CentralFD, ComplexStep)
+    dtypefd = FDType(coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+    @test dtypefd.coloring_algorithm === BEST_OF_COLORING_ALGORITHM
+    cachefd = SNOW.sparsejacobiancache(sp, dtypefd, tridiagonal!, nx, ng)
+    dgfd = zeros(length(sp.rows))
+    SNOW.sparsejacobian!(dgfd, x, cachefd)
+    Jsparsefd = Matrix(sparse(sp.rows, sp.cols, dgfd, ng, nx))
+    @test isapprox(Jsparsefd, Jdense; atol=1e-4)
+end
 
 # a user-supplied precomputed coloring (not a GreedyColoringAlgorithm) should
 # also work, exercising the fully generic ADTypes.AbstractColoringAlgorithm path
@@ -234,12 +288,14 @@ SNOW.sparsejacobian!(dgconst, x, cacheconst)
 Jsparseconst = Matrix(sparse(sp.rows, sp.cols, dgconst, ng, nx))
 @test isapprox(Jsparseconst, Jdense; atol=1e-8)
 
-dtypefdconst = ForwardFD(coloring_algorithm=constalg)
-cachefdconst = SNOW.sparsejacobiancache(sp, dtypefdconst, tridiagonal!, nx, ng)
-dgfdconst = zeros(length(sp.rows))
-SNOW.sparsejacobian!(dgfdconst, x, cachefdconst)
-Jsparsefdconst = Matrix(sparse(sp.rows, sp.cols, dgfdconst, ng, nx))
-@test isapprox(Jsparsefdconst, Jdense; atol=1e-4)
+for FDType in (ForwardFD, CentralFD, ComplexStep)
+    dtypefdconst = FDType(coloring_algorithm=constalg)
+    cachefdconst = SNOW.sparsejacobiancache(sp, dtypefdconst, tridiagonal!, nx, ng)
+    dgfdconst = zeros(length(sp.rows))
+    SNOW.sparsejacobian!(dgfdconst, x, cachefdconst)
+    Jsparsefdconst = Matrix(sparse(sp.rows, sp.cols, dgfdconst, ng, nx))
+    @test isapprox(Jsparsefdconst, Jdense; atol=1e-4)
+end
 
 end
 
