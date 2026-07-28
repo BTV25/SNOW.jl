@@ -235,11 +235,8 @@ Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
 end
 
 
-@testset "sparse jacobian - named coloring algorithm presets" begin
-
-# default is the cheap natural-order coloring; users can opt into
-# BEST_OF_COLORING_ALGORITHM (or any other ADTypes.AbstractColoringAlgorithm)
-# for potentially fewer colors at a higher one-time cache-construction cost
+# shared by the "named coloring algorithm presets" and "repeated evaluation"
+# testsets below
 function tridiagonal!(g, x)
     n = length(x)
     g[1] = x[1]^2 - 2*x[2]
@@ -249,6 +246,12 @@ function tridiagonal!(g, x)
     g[n] = x[n]^2 - x[n-1]
     return sum(abs2, x)
 end
+
+@testset "sparse jacobian - named coloring algorithm presets" begin
+
+# default is the cheap natural-order coloring; users can opt into
+# BEST_OF_COLORING_ALGORITHM (or any other ADTypes.AbstractColoringAlgorithm)
+# for potentially fewer colors at a higher one-time cache-construction cost
 
 nx = 10
 ng = 10
@@ -347,15 +350,6 @@ end
 # a single cache must produce correct results across many calls at
 # different x, not just the first call (catches stale-state bugs in
 # reused scratch buffers / prepared coloring state)
-function tridiagonal!(g, x)
-    n = length(x)
-    g[1] = x[1]^2 - 2*x[2]
-    for i in 2:n-1
-        g[i] = x[i-1]*x[i] - x[i+1]^2 + sin(x[i])
-    end
-    g[n] = x[n]^2 - x[n-1]
-    return sum(abs2, x)
-end
 
 nx = 10
 ng = 10
@@ -471,6 +465,19 @@ ng = 3
 options = Options(solver=IPOPT(), derivatives=ForwardFD())
 xopt, fopt, info, out = minimize(barnes, x0, ng, lx, ux, -Inf, 0.0, options)
 
+
+@test isapprox(xopt[1], 49.5263; atol=1e-4)
+@test isapprox(xopt[2], 19.6228; atol=1e-4)
+@test isapprox(fopt, -31.6368; atol=1e-4)
+@test info == :Solve_Succeeded || info == :Solved_To_Acceptable_Level
+
+# same problem, but through a SparsePattern + DifferentiationInterface-based
+# ForwardAD sparse jacobian, end-to-end through the real Ipopt callback loop
+# (Ipopt calls the jacobian callback many times at different x during the
+# solve, unlike the isolated single/few-call tests in the testsets above)
+sp_barnes = SparsePattern(ForwardAD(), barnes, ng, lx, ux)
+options = Options(solver=IPOPT(), derivatives=[ReverseAD(), ForwardAD()], sparsity=sp_barnes)
+xopt, fopt, info, out = minimize(barnes, x0, ng, lx, ux, -Inf, 0.0, options)
 
 @test isapprox(xopt[1], 49.5263; atol=1e-4)
 @test isapprox(xopt[2], 19.6228; atol=1e-4)
