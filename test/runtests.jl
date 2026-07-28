@@ -1,6 +1,9 @@
 using SNOW
 using Test
 using Zygote
+using ForwardDiff
+using SparseArrays
+using SparseMatrixColorings
 
 snopttest = false
 
@@ -79,19 +82,68 @@ for algorithm in (
         SNOW.SparseMatrixColorings.SmallestLast()),
     SNOW.SparseMatrixColorings.ConstantColoringAlgorithm(ones(ng, nx), [1, 2]),
 )
-    for dtype in (ForwardAD(), ForwardFD())
+    for dtype in (
+        ForwardAD(coloring_algorithm=algorithm),
+        ForwardFD(coloring_algorithm=algorithm),
+        CentralFD(coloring_algorithm=algorithm),
+        ComplexStep(coloring_algorithm=algorithm),
+    )
         dg = zeros(length(sp.rows))
-        cache = SNOW.createcache(sp, [ReverseAD(), dtype], test1!, nx, ng;
-            coloring_algorithm=algorithm)
+        cache = SNOW.createcache(sp, [ReverseAD(), dtype], test1!, nx, ng)
         SNOW.evaluate!(g, df, dg, x, cache)
         @test isapprox(dg, [-2.0, 2*x[1], 1.0, -1.0])
     end
 end
 
-options = Options(sparsity=sp, derivatives=[ReverseAD(), ForwardAD()],
-    coloring_algorithm=SNOW.SparseMatrixColorings.GreedyColoringAlgorithm(
-        SNOW.SparseMatrixColorings.SmallestLast()))
-@test options.coloring_algorithm isa SNOW.SparseMatrixColorings.GreedyColoringAlgorithm
+@test ForwardAD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+@test ForwardFD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+@test CentralFD().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+@test ComplexStep().coloring_algorithm === SNOW.DEFAULT_COLORING_ALGORITHM
+
+# user-supplied derivatives (no AD/FD at all) - dense and sparse
+function userderiv_dense!(g, df, Jac, x)
+    f = x[1]^2 - x[2]
+    g[1] = x[2] - 2*x[1]
+    g[2] = -x[2]
+    g[3] = x[1]^2
+    df[1] = 2*x[1]
+    df[2] = -1.0
+    Jac[1,1] = -2.0
+    Jac[1,2] = 1.0
+    Jac[2,1] = 0.0
+    Jac[2,2] = -1.0
+    Jac[3,1] = 2*x[1]
+    Jac[3,2] = 0.0
+    return f
+end
+
+dg = zeros(ng*nx)
+cache = SNOW.createcache(DensePattern(), UserDeriv(), userderiv_dense!, nx, ng)
+SNOW.evaluate!(g, df, dg, x, cache)
+@test df == [2*x[1]; -1.0]
+@test dg == [-2.0, 0.0, 2*x[1], 1.0, -1.0, 0.0]
+
+# user-supplied derivatives, sparse: dg is a vector in sp.rows/sp.cols order
+# (sp.rows == [1, 3, 1, 2], sp.cols == [1, 1, 2, 2])
+function userderiv_sparse!(g, df, dg, x)
+    f = x[1]^2 - x[2]
+    g[1] = x[2] - 2*x[1]
+    g[2] = -x[2]
+    g[3] = x[1]^2
+    df[1] = 2*x[1]
+    df[2] = -1.0
+    dg[1] = -2.0
+    dg[2] = 2*x[1]
+    dg[3] = 1.0
+    dg[4] = -1.0
+    return f
+end
+
+dg = zeros(length(sp.rows))
+cache = SNOW.createcache(sp, UserDeriv(), userderiv_sparse!, nx, ng)
+SNOW.evaluate!(g, df, dg, x, cache)
+@test df == [2*x[1]; -1.0]
+@test dg == [-2.0, 2*x[1], 1.0, -1.0]
 
 # # sparse with zygote and forward
 # dg = zeros(length(sp.rows))
@@ -111,6 +163,247 @@ end
 #     # 9.865 μs (6 allocations: 11.63 KiB)
 # end
 # # ----------------------------------------
+
+
+@testset "sparse jacobian - finite differencing" begin
+
+# also exercises a trailing all-zero row/column: g[end] doesn't depend on
+# x at all, and x[end] doesn't affect any constraint - a regression check
+# for the sparsity-matrix dimensions being explicit (ng, nx).
+function dropped!(g, x)
+    n = length(x)
+    for i in 1:n-1
+        g[i] = x[i]^2 + sin(x[i])
+    end
+    g[n] = 1.0
+    return sum(abs2, x[1:n-1])
+end
+
+nx = 5
+ng = 5
+lx = -5*ones(nx)
+ux = 5*ones(nx)
+sp = SparsePattern(ForwardAD(), dropped!, ng, lx, ux)
+x = collect(range(0.2, 1.8, length=nx))
+Jdense = ForwardDiff.jacobian(dropped!, zeros(ng), x)
+
+cache = SNOW.sparsejacobiancache(sp, ForwardAD(), dropped!, nx, ng)
+dg = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dg, x, cache)
+Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
+@test isapprox(Jsparse, Jdense; atol=1e-10)
+
+for dtype in (ForwardFD(), CentralFD(), ComplexStep())
+    cache = SNOW.sparsejacobiancache(sp, dtype, dropped!, nx, ng)
+    dgfd = zeros(length(sp.rows))
+    SNOW.sparsejacobian!(dgfd, x, cache)
+    Jsparsefd = Matrix(sparse(sp.rows, sp.cols, dgfd, ng, nx))
+    @test isapprox(Jsparsefd, Jdense; atol=1e-4)
+end
+
+end
+
+
+@testset "sparse jacobian - many colors" begin
+
+# g[1] depends on every x[i], so every column conflicts with every other
+# column in the coloring graph -> ncolors == nx. stresses the coloring path
+# well beyond the single/few-color cases covered above.
+function starfun!(g, x)
+    n = length(x)
+    g[1] = sum(x)
+    for i in 2:n
+        g[i] = x[i]^2 + 0.1*x[1]
+    end
+    return sum(abs2, x)
+end
+
+nx = 20
+ng = 20
+lx = -5*ones(nx)
+ux = 5*ones(nx)
+sp = SparsePattern(ForwardAD(), starfun!, ng, lx, ux)
+x = collect(range(0.1, 2.0, length=nx))
+Jdense = ForwardDiff.jacobian(starfun!, zeros(ng), x)
+
+cache = SNOW.sparsejacobiancache(sp, ForwardAD(), starfun!, nx, ng)
+dg = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dg, x, cache)
+Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
+@test isapprox(Jsparse, Jdense; atol=1e-8)
+
+end
+
+
+# shared by the "named coloring algorithm presets" and "repeated evaluation"
+# testsets below
+function tridiagonal!(g, x)
+    n = length(x)
+    g[1] = x[1]^2 - 2*x[2]
+    for i in 2:n-1
+        g[i] = x[i-1]*x[i] - x[i+1]^2 + sin(x[i])
+    end
+    g[n] = x[n]^2 - x[n-1]
+    return sum(abs2, x)
+end
+
+@testset "sparse jacobian - named coloring algorithm presets" begin
+
+# default is the cheap natural-order coloring; users can opt into
+# BEST_OF_COLORING_ALGORITHM (or any other ADTypes.AbstractColoringAlgorithm)
+# for potentially fewer colors at a higher one-time cache-construction cost
+
+nx = 10
+ng = 10
+lx = -5*ones(nx)
+ux = 5*ones(nx)
+sp = SparsePattern(ForwardAD(), tridiagonal!, ng, lx, ux)
+x = collect(range(0.2, 1.7, length=nx))
+Jdense = ForwardDiff.jacobian(tridiagonal!, zeros(ng), x)
+
+dtype = ForwardAD(coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+@test dtype.coloring_algorithm === BEST_OF_COLORING_ALGORITHM
+cache = SNOW.sparsejacobiancache(sp, dtype, tridiagonal!, nx, ng)
+dg = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dg, x, cache)
+Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
+@test isapprox(Jsparse, Jdense; atol=1e-8)
+
+for FDType in (ForwardFD, CentralFD, ComplexStep)
+    dtypefd = FDType(coloring_algorithm=BEST_OF_COLORING_ALGORITHM)
+    @test dtypefd.coloring_algorithm === BEST_OF_COLORING_ALGORITHM
+    cachefd = SNOW.sparsejacobiancache(sp, dtypefd, tridiagonal!, nx, ng)
+    dgfd = zeros(length(sp.rows))
+    SNOW.sparsejacobian!(dgfd, x, cachefd)
+    Jsparsefd = Matrix(sparse(sp.rows, sp.cols, dgfd, ng, nx))
+    @test isapprox(Jsparsefd, Jdense; atol=1e-4)
+end
+
+# a user-supplied precomputed coloring (not a GreedyColoringAlgorithm) should
+# also work, exercising the fully generic ADTypes.AbstractColoringAlgorithm path
+Jsp = sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)
+constalg = SparseMatrixColorings.ConstantColoringAlgorithm(Jsp, [mod1(i, 3) for i in 1:nx])
+
+dtypeconst = ForwardAD(coloring_algorithm=constalg)
+cacheconst = SNOW.sparsejacobiancache(sp, dtypeconst, tridiagonal!, nx, ng)
+dgconst = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dgconst, x, cacheconst)
+Jsparseconst = Matrix(sparse(sp.rows, sp.cols, dgconst, ng, nx))
+@test isapprox(Jsparseconst, Jdense; atol=1e-8)
+
+for FDType in (ForwardFD, CentralFD, ComplexStep)
+    dtypefdconst = FDType(coloring_algorithm=constalg)
+    cachefdconst = SNOW.sparsejacobiancache(sp, dtypefdconst, tridiagonal!, nx, ng)
+    dgfdconst = zeros(length(sp.rows))
+    SNOW.sparsejacobian!(dgfdconst, x, cachefdconst)
+    Jsparsefdconst = Matrix(sparse(sp.rows, sp.cols, dgfdconst, ng, nx))
+    @test isapprox(Jsparsefdconst, Jdense; atol=1e-4)
+end
+
+end
+
+
+@testset "sparse jacobian - non-square" begin
+
+# more constraints than variables (overdetermined), banded + wraparound
+# coupling so ng != nx and the sparsity matrix is rectangular
+function overdetermined!(g, x)
+    nx = length(x)
+    ng = length(g)
+    for i in 1:ng
+        j1 = ((i - 1) % nx) + 1
+        j2 = (i % nx) + 1
+        g[i] = 0.3*x[j1]^2 + (j2 != j1 ? 0.2*x[j2] : 0.0)
+    end
+    return sum(abs2, x)
+end
+
+nx = 6
+ng = 14
+lx = -5*ones(nx)
+ux = 5*ones(nx)
+x = collect(range(0.15, 1.9, length=nx))
+Jdense = ForwardDiff.jacobian(overdetermined!, zeros(ng), x)
+
+sp = SparsePattern(ForwardAD(), overdetermined!, ng, lx, ux)
+@test size(sparse(sp.rows, sp.cols, ones(length(sp.rows)), ng, nx)) == (ng, nx)
+
+cache = SNOW.sparsejacobiancache(sp, ForwardAD(), overdetermined!, nx, ng)
+dg = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dg, x, cache)
+Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
+@test isapprox(Jsparse, Jdense; atol=1e-8)
+
+for dtype in (ForwardFD(), CentralFD(), ComplexStep())
+    cachefd = SNOW.sparsejacobiancache(sp, dtype, overdetermined!, nx, ng)
+    dgfd = zeros(length(sp.rows))
+    SNOW.sparsejacobian!(dgfd, x, cachefd)
+    Jsparsefd = Matrix(sparse(sp.rows, sp.cols, dgfd, ng, nx))
+    @test isapprox(Jsparsefd, Jdense; atol=1e-4)
+end
+
+end
+
+
+@testset "sparse jacobian - repeated evaluation" begin
+
+# a single cache must produce correct results across many calls at
+# different x, not just the first call (catches stale-state bugs in
+# reused scratch buffers / prepared coloring state)
+
+nx = 10
+ng = 10
+lx = -5*ones(nx)
+ux = 5*ones(nx)
+sp = SparsePattern(ForwardAD(), tridiagonal!, ng, lx, ux)
+
+cache = SNOW.sparsejacobiancache(sp, ForwardAD(), tridiagonal!, nx, ng)
+dg = zeros(length(sp.rows))
+
+for trial in 1:5
+    x = collect(range(0.1*trial, 0.1*trial + 1.5, length=nx))
+    SNOW.sparsejacobian!(dg, x, cache)
+    Jsparse = Matrix(sparse(sp.rows, sp.cols, dg, ng, nx))
+    Jdense = ForwardDiff.jacobian(tridiagonal!, zeros(ng), x)
+    @test isapprox(Jsparse, Jdense; atol=1e-8)
+end
+
+end
+
+
+@testset "sparse jacobian - empty sparsity" begin
+
+# constraints that don't depend on x at all: sp.rows/cols come back empty.
+# confirm the DifferentiationInterface path degrades gracefully rather
+# than erroring on a zero-color case.
+function constantfun!(g, x)
+    g[1] = 5.0
+    g[2] = -3.0
+    return sum(abs2, x)
+end
+
+nx = 4
+ng = 2
+lx = -5*ones(nx)
+ux = 5*ones(nx)
+sp = SparsePattern(ForwardAD(), constantfun!, ng, lx, ux)
+@test isempty(sp.rows)
+
+x = collect(range(0.3, 1.2, length=nx))
+
+cache = SNOW.sparsejacobiancache(sp, ForwardAD(), constantfun!, nx, ng)
+dg = zeros(length(sp.rows))
+SNOW.sparsejacobian!(dg, x, cache)
+@test isempty(dg)
+
+for dtype in (ForwardFD(), CentralFD(), ComplexStep())
+    cachefd = SNOW.sparsejacobiancache(sp, dtype, constantfun!, nx, ng)
+    dgfd = zeros(length(sp.rows))
+    SNOW.sparsejacobian!(dgfd, x, cachefd)
+    @test isempty(dgfd)
+end
+
+end
 
 
 @testset "optimization" begin
@@ -172,6 +465,19 @@ ng = 3
 options = Options(solver=IPOPT(), derivatives=ForwardFD())
 xopt, fopt, info, out = minimize(barnes, x0, ng, lx, ux, -Inf, 0.0, options)
 
+
+@test isapprox(xopt[1], 49.5263; atol=1e-4)
+@test isapprox(xopt[2], 19.6228; atol=1e-4)
+@test isapprox(fopt, -31.6368; atol=1e-4)
+@test info == :Solve_Succeeded || info == :Solved_To_Acceptable_Level
+
+# same problem, but through a SparsePattern + DifferentiationInterface-based
+# ForwardAD sparse jacobian, end-to-end through the real Ipopt callback loop
+# (Ipopt calls the jacobian callback many times at different x during the
+# solve, unlike the isolated single/few-call tests in the testsets above)
+sp_barnes = SparsePattern(ForwardAD(), barnes, ng, lx, ux)
+options = Options(solver=IPOPT(), derivatives=[ReverseAD(), ForwardAD()], sparsity=sp_barnes)
+xopt, fopt, info, out = minimize(barnes, x0, ng, lx, ux, -Inf, 0.0, options)
 
 @test isapprox(xopt[1], 49.5263; atol=1e-4)
 @test isapprox(xopt[2], 19.6228; atol=1e-4)
